@@ -23,9 +23,9 @@ We conducted a quick data cleaning and exploratory data analysis (EDA). The word
 ## Data Visualization Plan
 Our motivation stems from a preliminary analysis indicating that Trump-related news, especially concerning tariffs and trade policies, significantly impacts both public sentiment and financial markets. 
 
-By scraping and sentiment-scoring a corpus of BBC articles mentioning Trump, and then mapping average positivity and negativity across countries and policy themes (e.g. trade, tariffs, finance, technology), audiences can immediately see which regions and topics provoke the strongest reactions. At the same time, integrating stock-price time series for major indices or key sector ETFs lets us explore whether surges in media optimism or pessimism line up with market rallies or sell-offs.
+1. By scraping and sentiment-scoring a corpus of BBC articles mentioning Trump, and then mapping average positivity and negativity across countries and policy themes (e.g. trade, tariffs, finance, technology), audiences can immediately see which regions and topics provoke the strongest reactions. At the same time, integrating stock-price time series for major indices or key sector ETFs lets us explore whether surges in media optimism or pessimism line up with market rallies or sell-offs.
 
-This project brings together news sentiment, interactive maps, and market charts into a single dashboard, making it easy for users to analyze sentiment and market reactions simultaneously. For example, you can ask, “Did negative headlines about tariffs in Asia line up with a sell-off in export stocks?” and view both the sentiment curve and the stock chart side by side. This provides a clear and accessible real-world story of how public mood meets price action.
+2. This project brings together news sentiment, interactive maps, and market charts into a single dashboard, making it easy for users to analyze sentiment and market reactions simultaneously. For example, you can ask, “Did negative headlines about tariffs in Asia line up with a sell-off in export stocks?” and view both the sentiment curve and the stock chart side by side. This provides a clear and accessible real-world story of how public mood meets price action.
 
 ## Weekly Plan
 
