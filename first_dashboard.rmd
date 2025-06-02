@@ -1,0 +1,309 @@
+---
+title: "Trump Sentiment Analysis in BBC News"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(lubridate)
+library(tidytext)
+library(wordcloud)
+library(RColorBrewer)
+library(topicmodels)
+library(syuzhet)
+library(tm)
+library(scales)
+library(ggthemes)
+library(plotly)
+library(textdata)
+library(vader)
+library(countrycode)
+library(DT)
+
+knitr::opts_chunk$set(
+  error = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+```{r data_loading, include=FALSE}
+# Load the data
+df <- read.csv("bbc_news_articles.csv", stringsAsFactors = FALSE)
+
+# Handle date parsing more robustly
+tryCatch({
+  df$published <- parse_date_time(df$published, 
+                                  orders = c("ymd_HMS", "ymd_HM", "ymd", "dmy_HMS", "dmy_HM", "dmy"),
+                                  quiet = TRUE)
+}, error = function(e) {
+  cat("Warning: Could not parse dates properly. Using string version instead.\n")
+  df$published <- as.character(df$published)
+})
+
+# Filter for Trump articles
+df_trump <- df %>%
+  filter(grepl("\\bTrump\\b", content, ignore.case = TRUE))
+
+# Add month column
+if(is.character(df_trump$published)) {
+  df_trump$month <- substr(df_trump$published, 1, 7)
+} else {
+  df_trump$month <- floor_date(df_trump$published, "month")
+}
+
+# Calculate sentiment
+df_trump$content <- ifelse(is.na(df_trump$content), "", df_trump$content)
+tryCatch({
+  if(require(vader, quietly = TRUE)) {
+    df_trump$sentiment <- vader_df(df_trump$content)$compound
+  } else {
+    raw_sentiment <- get_sentiment(df_trump$content, method = "syuzhet")
+    df_trump$sentiment <- tanh(raw_sentiment / max(abs(raw_sentiment), na.rm = TRUE))
+  }
+}, error = function(e) {
+  raw_sentiment <- get_sentiment(df_trump$content, method = "bing")
+  df_trump$sentiment <- raw_sentiment / max(abs(raw_sentiment), na.rm = TRUE)
+})
+df_trump$sentiment <- pmax(-1, pmin(1, df_trump$sentiment))
+```
+
+Column {data-width=700}
+-----------------------------------------------------------------------
+
+### Global Sentiment on Trump-Related Articles {data-height=600}
+```{r choropleth_map}
+# Function to find country mentions
+find_countries_in_text <- function(text) {
+  all_countries <- unique(countrycode::codelist$country.name.en)
+  if(is.na(text)) return(character(0))
+  mentioned <- all_countries[sapply(all_countries, function(country) {
+    grepl(paste0("\\b", country, "\\b"), text, ignore.case = TRUE)
+  })]
+  mentioned
+}
+
+if(nrow(df_trump) > 0) {
+  country_sentiments <- list()
+  for(i in seq_len(nrow(df_trump))) {
+    txt <- df_trump$content[i]
+    if(nzchar(txt)) {
+      sent <- df_trump$sentiment[i]
+      ctrs <- find_countries_in_text(txt)
+      for(c in ctrs) {
+        country_sentiments[[c]] <- c(country_sentiments[[c]], sent)
+      }
+    }
+  }
+  sent_data <- do.call(rbind, lapply(names(country_sentiments), function(country) {
+    iso <- countrycode::countrycode(country, "country.name", "iso3c")
+    data.frame(country=country,
+               iso3=iso,
+               avg_sentiment=mean(country_sentiments[[country]], na.rm=TRUE),
+               article_count=length(country_sentiments[[country]]),
+               stringsAsFactors=FALSE)
+  }))
+
+  if(nrow(sent_data) >= 3) {
+    plot_ly(sent_data, type="choropleth",
+            locations=~iso3, z=~avg_sentiment,
+            text=~paste(country, "<br>Sentiment:", round(avg_sentiment,3),
+                        "<br>Articles:", article_count),
+            colorscale=list(c(0,"red"),c(0.5,"white"),c(1,"green")),
+            zmin=-1,zmax=1) %>%
+      colorbar(title="Sentiment Score") %>%
+      layout(title="Average Sentiment on Trump-Related Articles by Country Mentions",
+             geo=list(showframe=FALSE, showcoastlines=TRUE,
+                      projection=list(type="natural earth")))
+  } else {
+    plot.new(); text(0.5,0.5,"Not enough country mentions to create world map\n(Need at least 3 countries)")
+  }
+} else {
+  plot.new(); text(0.5,0.5,"No content data available for country sentiment analysis")
+}
+```
+
+### Word Clouds of Most Extreme Articles {data-height=400}
+```{r wordclouds, fig.width=12, fig.height=6}
+if(nrow(df_trump)>=10) {
+  neg10 <- df_trump %>% arrange(sentiment) %>% head(10)
+  pos10 <- df_trump %>% arrange(desc(sentiment)) %>% head(10)
+  neg_text <- paste(neg10$content, collapse=" ")
+  pos_text <- paste(pos10$content, collapse=" ")
+  custom_sw <- c(stopwords("english"), "trump","said","would","also","one","new","us",
+                 "mr","ms","will","people","can","could","may","just","say","says",
+                 "going","go","went","bbc","year","years","time","get","got","now",
+                 "today","week","month","day","way","like","make","made","use","used",
+                 "even","since","last","first","two","three","many","much","well","still",
+                 "back","see","saw","really","good","bad","need","take","know","think","come","came")
+
+  par(mfrow=c(1,2), mar=c(1,1,3,1))
+  tryCatch({
+    neg_c <- Corpus(VectorSource(neg_text)) %>%
+      tm_map(content_transformer(tolower)) %>%
+      tm_map(removePunctuation) %>%
+      tm_map(removeNumbers) %>%
+      tm_map(removeWords, custom_sw) %>%
+      tm_map(stripWhitespace)
+    neg_tdm <- TermDocumentMatrix(neg_c)
+    neg_freqs <- rowSums(as.matrix(neg_tdm))
+    if(length(neg_freqs)>10) {
+      wordcloud(names(neg_freqs), neg_freqs, max.words=100, random.order=FALSE,
+                colors=brewer.pal(8,"Dark2"), scale=c(3,0.3))
+      title("Word Cloud of 10 Most Negative Articles", line=1)
+    }
+
+    pos_c <- Corpus(VectorSource(pos_text)) %>%
+      tm_map(content_transformer(tolower)) %>%
+      tm_map(removePunctuation) %>%
+      tm_map(removeNumbers) %>%
+      tm_map(removeWords, custom_sw) %>%
+      tm_map(stripWhitespace)
+    pos_tdm <- TermDocumentMatrix(pos_c)
+    pos_freqs <- rowSums(as.matrix(pos_tdm))
+    if(length(pos_freqs)>10) {
+      wordcloud(names(pos_freqs), pos_freqs, max.words=100, random.order=FALSE,
+                colors=brewer.pal(8,"Set2"), scale=c(3,0.3))
+      title("Word Cloud of 10 Most Positive Articles", line=1)
+    }
+  }, error=function(e){
+    plot.new(); text(0.5,0.5,"Error creating wordclouds")
+  })
+} else {
+  plot.new(); text(0.5,0.5,"Not enough articles for wordcloud analysis")
+}
+```
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Sentiment Distribution for Trump Articles {data-height=300}
+```{r sentiment_distribution}
+if(nrow(df_trump)>0) {
+  hist_data <- hist(df_trump$sentiment, breaks=20, plot=FALSE)
+  max_count <- max(hist_data$counts)
+  ann <- data.frame(x=0.05, y=max_count*0.8, label="Neutral\nThreshold")
+  p <- ggplot(df_trump, aes(x=sentiment)) +
+    geom_histogram(bins=20, fill="lightblue", color="black", alpha=0.7) +
+    geom_density(aes(y=after_stat(density)*nrow(df_trump)*0.1),
+                 alpha=0.3, fill="blue") +
+    theme_minimal() +
+    labs(x="VADER Compound Score", y="Count",
+         title="Distribution of VADER Compound Scores for Trump Articles") +
+    geom_vline(xintercept=0, linetype="dashed", color="black") +
+    scale_x_continuous(limits=c(-1,1)) +
+    geom_text(data=ann, aes(x=x, y=y, label=label), inherit.aes=FALSE, size=3, hjust=0)
+  ggplotly(p)
+} else {
+  plot.new(); text(0.5,0.5,"No data available")
+}
+```
+
+### Topic Modeling & Sentiment Analysis {data-height=400}
+```{r topic_modeling, warning=FALSE, message=FALSE}
+if(nrow(df_trump) >= 10) {
+  clean_content <- df_trump$content %>%
+    str_to_lower() %>%
+    str_remove_all("[^a-zA-Z\\s]") %>%
+    str_squish()
+  corpus <- Corpus(VectorSource(clean_content)) %>%
+    tm_map(removeWords, stopwords("english")) %>%
+    tm_map(stripWhitespace)
+  dtm <- DocumentTermMatrix(corpus, control=list(bounds=list(global=c(2,Inf))))
+  dtm <- removeSparseTerms(dtm, 0.95)
+  rowTotals <- rowSums(as.matrix(dtm))
+  dtm <- dtm[rowTotals>0,]
+  df_filt <- df_trump[rowTotals>0,]
+
+  if(nrow(dtm)>=6 && ncol(dtm)>=10) {
+    set.seed(42)
+    lda_model <- LDA(dtm, k=6, method="Gibbs",
+                     control=list(seed=42, iter=10, verbose=FALSE))
+    topics <- topics(lda_model)
+    df_filt$dominant_topic <- topics
+    terms_mat <- terms(lda_model, 8)
+    topic_labels <- apply(terms_mat, 2, function(x) paste(x[1:4], collapse=", "))
+    topic_sentiment <- df_filt %>%
+      group_by(dominant_topic) %>%
+      summarise(avg_sentiment=mean(sentiment,na.rm=TRUE),
+                count=n()) %>%
+      mutate(topic_keywords=topic_labels[dominant_topic]) %>%
+      arrange(avg_sentiment)
+
+    p <- ggplot(topic_sentiment, aes(x=avg_sentiment,
+                                     y=reorder(topic_keywords,avg_sentiment))) +
+      geom_col(fill="skyblue",color="black") +
+      theme_minimal() +
+      labs(y="Topic Keywords", x="Average VADER Compound Sentiment",
+           title="Avg Sentiment by LDA Topic for Trump Articles") +
+      geom_vline(xintercept=0, linetype="dashed") +
+      scale_x_continuous(limits=c(-1,1))
+    ggplotly(p)
+  } else {
+    plot.new(); text(0.5,0.5,"Insufficient data for topic modeling")
+  }
+} else {
+  plot.new(); text(0.5,0.5,"Insufficient data for topic modeling")
+}
+```
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Sentiment by Section for Trump Articles {data-height=300}
+```{r section_sentiment}
+if("section" %in% names(df_trump) && length(unique(df_trump$section))>1) {
+  sec_counts <- df_trump %>% group_by(section) %>% summarise(n=n()) %>% filter(n>=3)
+  df_sec <- df_trump %>% filter(section %in% sec_counts$section)
+  if(nrow(df_sec)>0) {
+    p <- ggplot(df_sec, aes(x=section, y=sentiment)) +
+      geom_boxplot(fill="lightblue", alpha=0.7) +
+      theme_minimal() +
+      labs(x="Section", y="VADER Compound Score",
+           title="Sentiment by Section for Trump-Related Articles") +
+      theme(axis.text.x=element_text(angle=45, hjust=1)) +
+      geom_hline(yintercept=0, linetype="dashed", color="red") +
+      scale_y_continuous(limits=c(-1,1))
+    ggplotly(p)
+  } else {
+    plot.new(); text(0.5,0.5,"Not enough sections with sufficient articles")
+  }
+} else {
+  plot.new(); text(0.5,0.5,"Section data not available")
+}
+```
+
+### Top Extreme Headlines {data-height=200}
+```{r headlines}
+if(nrow(df_trump)>=10 && "headline" %in% names(df_trump)) {
+  neg5 <- df_trump %>% arrange(sentiment) %>% head(5) %>%
+    select(headline, sentiment) %>%
+    mutate(sentiment=round(sentiment,3), type="Negative") %>% arrange(sentiment)
+  pos5 <- df_trump %>% arrange(desc(sentiment)) %>% head(5) %>%
+    select(headline, sentiment) %>%
+    mutate(sentiment=round(sentiment,3), type="Positive") %>% arrange(desc(sentiment))
+  extreme <- bind_rows(neg5 %>% select(type, headline, sentiment),
+                       pos5 %>% select(type, headline, sentiment))
+  DT::datatable(extreme, options=list(pageLength=10, scrollX=TRUE, scrollY="300px", dom='t',
+                                      columnDefs=list(list(width='80px',targets=0),
+                                                      list(width='60px',targets=2),
+                                                      list(width='400px',targets=1))),
+                rownames=FALSE,
+                colnames=c("Type","Headline","Sentiment"), caption="Top 5 Most Negative and Positive Headlines") %>%
+    DT::formatStyle("sentiment",
+                    backgroundColor=DT::styleInterval(c(-0.1,0.1), c("#ffcccc","#ffffcc","#ccffcc"))) %>%
+    DT::formatStyle("type",
+                    backgroundColor=DT::styleEqual(c("Negative","Positive"), c("#ffe6e6","#e6ffe6")))
+} else {
+  cat("<div style='text-align: center; padding: 50px;'>")
+  cat("<p style='font-size: 16px; color: #666;'>Insufficient data for headline analysis</p>")
+  cat("</div>")
+}
+```
