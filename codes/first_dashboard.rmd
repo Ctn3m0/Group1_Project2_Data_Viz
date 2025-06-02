@@ -34,7 +34,7 @@ knitr::opts_chunk$set(
 
 ```{r data_loading, include=FALSE}
 # Load the data
-df <- read.csv("bbc_news_articles.csv", stringsAsFactors = FALSE)
+df <- read.csv("../data/bbc_news_articles.csv", stringsAsFactors = FALSE)
 
 # Handle date parsing more robustly
 tryCatch({
